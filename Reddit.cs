@@ -54,10 +54,11 @@ class RedditAPI
     WebClient jsonGet;
     //A cache of me.json, since we likely don't need to retrieve it every time we use it
     Hashtable me;
+    //Username
     string usr;
     string modhash;
+    //This should contain the current error message.
     string errors;
-    Hashtable responseData;
 
     string cookiefn;
     /// <summary>
@@ -66,7 +67,7 @@ class RedditAPI
     /// <param name="user">Reddit account username</param>
     /// <param name="pswd">Reddit Account password</param>
     /// <param name="cookiefilename">File name of the cookie</param>
-    public RedditAPI(string user, string pswd, string cookiefilename/* = "cookie"*/)
+    public RedditAPI(string user, string pswd, string cookiefilename /*= "cookie"*/)
     {
         redditCookie = new CookieContainer();
         jsonGet = new WebClient();
@@ -74,14 +75,14 @@ class RedditAPI
         cookiefn = cookiefilename;
         //Attempt to load cookie file
         redditCookie = Loadcookie(cookiefilename);
-        if (redditCookie == null)
+        //if (redditCookie == null)
         {
             //cookie file not found so do a full login
             if (!Login(user, pswd))
             {
                 //We have a failed login show the errors.
                 MessageBox.Show(errors);
-                //Should probably throw an exception
+                //Should probably throw an exception instead
                 return;
             }
         }
@@ -98,52 +99,18 @@ class RedditAPI
     /// <returns>True/False depending on success of login</returns>
     private bool Login(string user, string pswd)
     {
-        
-        HttpWebRequest login = WebRequest.Create("http://www.reddit.com/api/login/" + user) as HttpWebRequest;
-        //We are doing a full login as we dont know cookies so no need to load any cookies
-        //login.CookieContainer = redditCookie;
-        login.Method = "POST";
-        login.ContentType = "application/x-www-form-urlencoded";
-
-        //Now for the actual payload of the POST
         string postData = string.Format("api_type=json&user={0}&passwd={1}", user, pswd);
-        byte[] dataBytes = ASCIIEncoding.ASCII.GetBytes(postData);
-        login.ContentLength = dataBytes.Length;
-        Stream postStream = login.GetRequestStream();
-
-        postStream.Write(dataBytes, 0, dataBytes.Length);
-        postStream.Close();
-
-        StreamReader r;
-        try
-        {
-            //Do the actual login
-            WebResponse response = login.GetResponse();
-            if (((HttpWebResponse)response).StatusCode != HttpStatusCode.OK)
-            {
-                errors = ((HttpWebResponse)response).StatusCode.ToString();
-                return false;
-            }
-            //Grab the Response
-            r = new StreamReader(response.GetResponseStream());
-        }
-        catch (WebException we)
-        {
-            errors = ((HttpWebResponse)we.Response).StatusCode.ToString();
-            return false;
-        }
+        string loginURI = "http://www.reddit.com/api/login/" + user;
+        Hashtable response = SendPOST(postData, loginURI);
         
-        //StreamReader r = new StreamReader(response.GetResponseStream());
-        //Decode the json response
-        Hashtable j = (Hashtable)JSON.JsonDecode(r.ReadToEnd());
         //First check for errors. Should always contain errors key.
-        if (((ArrayList)((Hashtable)j["json"])["errors"]).Count>0)
+        if (((ArrayList)((Hashtable)response["json"])["errors"]).Count>0)
         {
-            errors = ((ArrayList)((ArrayList)((Hashtable)j["json"])["errors"])[0])[0].ToString();
+            errors = ((ArrayList)((ArrayList)((Hashtable)response["json"])["errors"])[0])[0].ToString();
             return false;
         }
         //Only need the data segment
-        Hashtable data = ((Hashtable)((Hashtable)j["json"])["data"]);
+        Hashtable data = ((Hashtable)((Hashtable)response["json"])["data"]);
         modhash = data["modhash"].ToString();
         string cookieval = data["cookie"].ToString();
         //MessageBox.Show(r.ReadToEnd());
@@ -161,28 +128,8 @@ class RedditAPI
     /// <returns>True/false depending on success</returns>
     private bool GetMe()
     {
-        jsonGet.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr));
-        try
-        {
-            Stream jsonStream = jsonGet.OpenRead("http://www.reddit.com/api/me.json");
-
-            StreamReader jSR = new StreamReader(jsonStream);
-            string metmp = jSR.ReadToEnd();
-            Hashtable meData = (Hashtable)JSON.JsonDecode(metmp);
-            if (meData.ContainsKey("errors"))
-            {
-                errors = "Possible Cookie Fail";
-                return false;
-            }
-            me = (Hashtable)meData["data"];
-            modhash = (string)me["modhash"];
-            return true;
-        }
-        catch (WebException we)
-        {
-            errors = ((HttpWebResponse)we.Response).StatusCode.ToString();
-            return false;
-        }
+        me = (Hashtable)GetPage("http://www.reddit.com/api/me.json");
+        return me != null;
     }
 
     /// <summary>
@@ -211,43 +158,39 @@ class RedditAPI
     /// </summary>
     /// <param name="data">POST data</param>
     /// <param name="URI">URI to POST data to</param>
-    /// <returns>True/false based on success</returns>
-    private bool SendPOST(string data, string URI)
+    /// <returns>Returns Hashtable of reply data (possibly null if not json)</returns>
+    /// <exception cref="WebException">Will throw a web exception if there is a server error</exception>
+    private Hashtable SendPOST(string data, string URI)
     {
         HttpWebRequest connect = WebRequest.Create(new System.Uri(URI)) as HttpWebRequest;
-        connect.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri(URI));
-        connect.Headers["Useragent"] = "Duncans_pumpkin_bot";
-
-        connect.CookieContainer = redditCookie;
+        //connect.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri(URI));
+        //Set all of the appropriate headers
+        connect.Headers["Useragent"] = "Reddit_C#_API_bot";
+        //If we have the cookie then add it in.
+        if (redditCookie != null)
+            connect.CookieContainer = redditCookie;
         connect.Method = "POST";
         connect.ContentType = "application/x-www-form-urlencoded";
 
+        //Fill in the content length
         byte[] dataBytes = ASCIIEncoding.ASCII.GetBytes(data);
         connect.ContentLength = dataBytes.Length;
         Stream postStream = connect.GetRequestStream();
 
+        //Fill in the data
         postStream.Write(dataBytes, 0, dataBytes.Length);
         postStream.Close();
-        try
+        
+        //Do the actual connection
+        WebResponse response = connect.GetResponse();
+        if (((HttpWebResponse)response).StatusCode != HttpStatusCode.OK)
         {
-            //Do the actual connection
-            //connect.GetResponse();
-            WebResponse response = connect.GetResponse();
-            if (((HttpWebResponse)response).StatusCode != HttpStatusCode.OK)
-            {
-                errors = ((HttpWebResponse)response).StatusCode.ToString();
-                return false;
-            }
-            StreamReader r = new StreamReader(response.GetResponseStream());
-            string rawResponseData = r.ReadToEnd();
-            responseData = (Hashtable)JSON.JsonDecode(rawResponseData);
-            return true;
+            throw new WebException(((HttpWebResponse)response).StatusCode.ToString());
         }
-        catch (WebException we)
-        {
-            errors = ((HttpWebResponse)(we.Response)).StatusCode.ToString();
-            return false;
-        }
+        StreamReader r = new StreamReader(response.GetResponseStream());
+        string rawResponseData = r.ReadToEnd();
+        Hashtable responseData = (Hashtable)JSON.JsonDecode(rawResponseData);
+        return responseData;
     }
 
     public Hashtable GetPage(string URI)
@@ -277,27 +220,31 @@ class RedditAPI
 
     public bool ComposeMessage(string to, string subject, string text)
     {
-        bool resp = SendPOST(string.Format("uh={3}&to={0}&subject={1}&api_type=json&text={2}", to, subject, text, modhash),
+        return ComposeMessage(to, subject, text, "");
+    }
+    public bool ComposeMessage(string to, string subject, string text, string captcha)
+    {
+        Hashtable response = SendPOST(string.Format("uh={0}&to={1}&subject={2}&api_type=json&text={3}&captcha={4}", modhash, to, subject, text, captcha),
             "http://www.reddit.com/api/compose");
-        if (resp)
+        
+        if (((Hashtable)response["json"]).ContainsKey("errors"))
         {
-            if (((Hashtable)responseData["json"]).ContainsKey("errors"))
+            if (((ArrayList)((Hashtable)response["json"])["errors"]).Count > 0)
             {
-                if (((ArrayList)((ArrayList)((Hashtable)responseData["json"])["errors"])[0])[0].ToString() == "BAD_CAPTCHA")
+                if (((ArrayList)((ArrayList)((Hashtable)response["json"])["errors"])[0])[0].ToString() == "BAD_CAPTCHA")
                 {
                     string capt = GetCaptcha();
-                    return SendPOST(string.Format("api_type=json&uh={3}&to={0}&subject={1}&text={2}&{4}", to, subject, text, modhash, capt),
-            "http://www.reddit.com/api/compose");
+                    return ComposeMessage(to, subject, text, capt);
                     //Application.Run(capt);
                     //capt.Show();
-                    
+
                 }
                 return false;
             }
-            return true;
+            
         }
-        else
-            return false;
+        return true;
+        
     }
     /// <summary>
     /// Posts a comment to the specified "thing"
@@ -325,8 +272,8 @@ class RedditAPI
         btn.Dock = DockStyle.Bottom;
         jsonGet.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr));
 
-        SendPOST("uh=" + modhash, "http://www.reddit.com/api/new_captcha");
-        ArrayList respAlist = (ArrayList)responseData["jquery"];
+        Hashtable response = SendPOST("uh=" + modhash, "http://www.reddit.com/api/new_captcha");
+        ArrayList respAlist = (ArrayList)response["jquery"];
         string captAddrs = ((ArrayList)((ArrayList)respAlist[respAlist.Count - 1])[3])[0] as string;
 
         byte[] pngImage = jsonGet.DownloadData("http://www.reddit.com/captcha/" + captAddrs +".png");
@@ -340,7 +287,7 @@ class RedditAPI
             capt.Close();
         };
         capt.ShowDialog();
-        return string.Format("iden={0}&captcha={1}", captAddrs, txtbx.Text);
+        return string.Format("{0}&iden={1}", txtbx.Text, captAddrs);
     }
     /// <summary>
     /// Casts a vote on the specified "thing"
@@ -403,7 +350,6 @@ class RedditAPI
     /// <returns></returns>
     private bool Post(string kind, string url, string sr, string title)
     {
-        string modhash = (string)me["modhash"];
         SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&renderstyle=html", (string)me["modhash"], kind, url, sr, title),
                 "http://www.reddit.com/api/submit");
         return true;
@@ -417,7 +363,6 @@ class RedditAPI
     /// <param name="sr">Subreddit to post to</param>
     public void PostSelf(string link, string title, string sr)
     {
-
         Post("self", link, sr, title);
     }
 
