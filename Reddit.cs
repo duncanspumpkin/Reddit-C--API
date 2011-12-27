@@ -4,10 +4,12 @@ using System.Text;
 using System.Net;
 using System.IO;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Windows.Forms;
+using System.Xml;
 /*
  * C# Reddit API Class 1.0
  * By Ruairidh Barnes
@@ -50,7 +52,7 @@ namespace RedditApi
 {
     static class APIPaths
     {
-        public const string banned = "r/%s/about/banned";
+        public const string banned = "r/{0}/about/banned";
         public const string captcha = "captcha/";
         public const string clearflairtemplates = "api/clearflairtemplates/";
         public const string comment = "api/comment/";
@@ -69,6 +71,7 @@ namespace RedditApi
         public const string info = "button_info/";
         public const string login = "api/login/{0}/";
         public const string logout = "logout/";
+        public const string me = "api/me.json";
         public const string moderator = "message/moderator/";
         public const string moderators = "r/{0}/about/moderators";
         public const string morechildren = "api/morechildren/";
@@ -100,15 +103,34 @@ namespace RedditApi
     {
 
         CookieContainer redditCookie;
-        WebClient jsonGet;
+        WebClient jsonGet = new WebClient();
         //A cache of me.json, since we likely don't need to retrieve it every time we use it
-        Hashtable me;
+        Hashtable m_me;
         //Username
-        string usr;
-        string modhash;
+        string m_usr;
+        string m_modhash;
+        string m_useragent;
         //This should contain the current error message.
         string m_errors;
-        string m_host;
+        string m_domain = "http://www.reddit.com";
+        double m_seconds_between_calls = 2.0;
+        double m_seconds_before_cache_invalid = 30.0;
+        int m_content_limit = 25;
+        bool m_logged_in = false;
+        DateTime m_time_till_call = DateTime.Now;
+
+
+        Dictionary<string, string> m_object_mapping = new Dictionary<string, string>()
+        {
+            { "comment_kind", "t1"},
+            { "message_kind", "t4"},
+            { "more_kind", "more"},
+            { "redditor_kind", "t2"},
+            { "submission_kind", "t3"},
+            { "subreddit_kind", "t5"},
+            { "userlist_kind", "UserList"}
+        };
+        
         
         public string errors
         {
@@ -118,68 +140,120 @@ namespace RedditApi
             }
         }
 
-        string cookiefn;
-        /// <summary>
-        /// Class constructor, logs in or checks for previous login from cookie file
-        /// </summary>
-        /// <param name="user">Reddit account username</param>
-        /// <param name="pswd">Reddit Account password</param>
-        /// <param name="cookiefilename">File name of the cookie</param>
-        /// <param name="host">Host address of Website</param>
-        public RedditAPI(string user, string pswd, string cookiefilename, string host)
-        {
-            m_host = host;
-            redditCookie = new CookieContainer();
-            jsonGet = new WebClient();
-            usr = user;
-            cookiefn = cookiefilename;
-            //Attempt to load cookie file
-            redditCookie = Loadcookie(cookiefilename);
-            if (redditCookie == null)
-            {
-                //cookie file not found so do a full login
-                if (!Login(user, pswd))
-                {
-                    //We have a failed login show the errors.
-                    //MessageBox.Show(errors);
-                    //Should probably throw an exception instead
-                    return;
-                }
-            }
 
-            //Fill out the normal me info
-            GetMe();
+        public RedditAPI(string useragent)
+        {
+            m_useragent = useragent;
+
+            LoadConfigFile();
         }
-        public RedditAPI(string user, string pswd, string cookiefilename) : this(user, pswd, cookiefilename, "http://www.reddit.com") { }
         
+        RedditAPI():this("Reddit_C#_Bot"){}
+
+        void LoadConfigFile()
+        {
+            try
+            {
+                XmlTextReader doc = new XmlTextReader("reddit_api.xml");
+                while (doc.Read())
+                {
+                    if (doc.NodeType == XmlNodeType.Element)
+                    {
+                        switch (doc.Name)
+                        {
+                            case "seconds_between_api_calls":
+                                m_seconds_between_calls = doc.ReadElementContentAsDouble();
+                                break;
+                            case "seconds_before_cache_invalid":
+                                m_seconds_before_cache_invalid = doc.ReadElementContentAsDouble();
+                                break;
+                            case "default_content_limit":
+                                m_content_limit = doc.ReadElementContentAsInt();
+                                break;
+                            case "object_mappings":
+                                string kind = "", objectname = "";
+
+                                while (doc.MoveToNextAttribute())
+                                {
+
+                                    if (doc.Name == "kind")
+                                    {
+                                        kind = doc.Value;
+                                    }
+                                    else if (doc.Name == "object")
+                                    {
+                                        objectname = doc.Value;
+                                    }
+                                }
+                                if (m_object_mapping.ContainsKey(kind))
+                                    m_object_mapping["kind"] = objectname;
+                                else
+                                    m_object_mapping.Add(kind, objectname);
+                                break;
+                            case "domain":
+                                m_domain = doc.ReadElementContentAsString();
+                                break;
+                        }
+                    }
+                }
+                doc.Close();
+            }
+            catch (FileNotFoundException)
+            {
+                StreamWriter s = new StreamWriter("reddit_api.xml");
+                s.WriteLine("<?xml version=\"1.0\" encoding=\"utf-8\" ?>");
+                s.WriteLine("<reddit_api_config>");
+                s.WriteLine("<seconds_between_api_calls>2</seconds_between_api_calls>" );
+                s.WriteLine("<seconds_before_cache_invalid>30</seconds_before_cache_invalid>");
+                s.WriteLine("<default_content_limit>25</default_content_limit>");
+                s.WriteLine("<object_mappings kind=\"comment_kind\" object=\"t1\"/>");
+                s.WriteLine("<object_mappings kind=\"message_kind\" object=\"t4\"/>");
+                s.WriteLine("<object_mappings kind=\"more_kind\" object =\"more\"/>");
+                s.WriteLine("<object_mappings kind=\"redditor_kind\" object=\"t2\"/>");
+                s.WriteLine("<object_mappings kind=\"submission_kind\" object=\"t3\"/>");
+                s.WriteLine("<object_mappings kind=\"subreddit_kind\" object=\"t5\"/>");
+                s.WriteLine("<object_mappings kind=\"userlist_kind\" object=\"UserList\"/>");
+                s.WriteLine("<domain>http://www.reddit.com/</domain>");
+                s.WriteLine("<!--");
+                s.WriteLine("message_kind:    t7");
+                s.WriteLine("submission_kind: t6");
+                s.WriteLine("subreddit_kind:  t5");
+                s.WriteLine("  -->");
+                s.WriteLine("</reddit_api_config>");
+                s.Close();
+                LoadConfigFile();
+            }
+        }
         /// <summary>
         /// Logs the user in
         /// </summary>
         /// <param name="user">Reddit account username</param>
         /// <param name="pswd">Reddit account password</param>
         /// <returns>True/False depending on success of login</returns>
-        private bool Login(string user, string pswd)
+        public bool Login(string user, string pswd)
         {
             string postData = string.Format("api_type=json&user={0}&passwd={1}", user, pswd);
-            string loginURI = m_host + APIPaths.login + user;
+            string loginURI = m_domain + string.Format(APIPaths.login, user);
             Hashtable response = SendPOST(postData, loginURI);
+            m_usr = user;
 
+            m_errors = GetErrorsFromRedditJson(response);
             //First check for errors. Should always contain errors key.
-            if (((ArrayList)((Hashtable)response["json"])["errors"]).Count > 0)
+            if (m_errors != "" )
             {
-                m_errors = ((ArrayList)((ArrayList)((Hashtable)response["json"])["errors"])[0])[0].ToString();
                 return false;
             }
             //Only need the data segment
             Hashtable data = ((Hashtable)((Hashtable)response["json"])["data"]);
-            modhash = data["modhash"].ToString();
+            m_modhash = data["modhash"].ToString();
             string cookieval = data["cookie"].ToString();
-            //MessageBox.Show(r.ReadToEnd());
-            //Console.WriteLine(r.ReadToEnd());
-            //Console.WriteLine(redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr)));
+            
             redditCookie = new CookieContainer();
-            redditCookie.Add(new System.Uri(m_host + APIPaths.login + user), new Cookie("reddit_session", cookieval.Replace(",", "%2c").Replace(":", "%3A"), "/", "reddit.com"));
-            Savecookie(cookiefn, redditCookie);
+            Uri cookieuri = new Uri(m_domain + string.Format(APIPaths.login, user));
+            redditCookie.Add(cookieuri, new Cookie("reddit_session", cookieval.Replace(",", "%2c").Replace(":", "%3A"), "/", "reddit.com"));
+            jsonGet.Headers["cookie"] = redditCookie.GetCookieHeader(cookieuri);
+
+            m_logged_in = true;
             return true;
         }
 
@@ -189,8 +263,8 @@ namespace RedditApi
         /// <returns>True/false depending on success</returns>
         private bool GetMe()
         {
-            me = (Hashtable)GetPage("http://www.reddit.com/api/me.json");
-            return me != null;
+            m_me = GetPage( m_domain + APIPaths.me);
+            return m_me != null;
         }
 
         /// <summary>
@@ -200,7 +274,7 @@ namespace RedditApi
         /// <remarks>e.g. (string)me["modhash"] would be the user's modhash as a string</remarks>
         public Hashtable GetMeCache()
         {
-            return me;
+            return m_me;
         }
 
         /// <summary>
@@ -211,7 +285,7 @@ namespace RedditApi
         {
             //Get a fresh copy of me.json
             GetMe();
-            return ((bool)me["has_mail"] == true);
+            return ((bool)m_me["has_mail"] == true);
         }
 
         /// <summary>
@@ -223,10 +297,16 @@ namespace RedditApi
         /// <exception cref="WebException">Will throw a web exception if there is a server error</exception>
         private Hashtable SendPOST(string data, string URI)
         {
-            HttpWebRequest connect = WebRequest.Create(new System.Uri(URI)) as HttpWebRequest;
-            //connect.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri(URI));
+            //First we need to delay as we are only allowed to ask the server once every 2 seconds.
+            while ((m_time_till_call.CompareTo(DateTime.Now)>0))
+            {
+                System.Threading.Thread.Sleep(100);
+            }
+            m_time_till_call = DateTime.Now.AddSeconds(m_seconds_between_calls);
+
+            HttpWebRequest connect = WebRequest.Create(new Uri(URI)) as HttpWebRequest;
             //Set all of the appropriate headers
-            connect.Headers["Useragent"] = "Reddit_C#_API_bot";
+            connect.Headers["Useragent"] = m_useragent;
             //If we have the cookie then add it in.
             if (redditCookie != null)
                 connect.CookieContainer = redditCookie;
@@ -256,8 +336,6 @@ namespace RedditApi
 
         public Hashtable GetPage(string URI)
         {
-            jsonGet.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr));
-
             try
             {
                 Stream jsonStream = jsonGet.OpenRead(URI);
@@ -285,24 +363,14 @@ namespace RedditApi
         }
         public bool ComposeMessage(string to, string subject, string text, string captcha)
         {
-            Hashtable response = SendPOST(string.Format("uh={0}&to={1}&subject={2}&api_type=json&text={3}&captcha={4}", modhash, to, subject, text, captcha),
-                "http://www.reddit.com/api/compose");
+            Hashtable response = SendPOST(string.Format("uh={0}&to={1}&subject={2}&api_type=json&text={3}&captcha={4}", m_modhash, to, subject, text, captcha),
+                m_domain + APIPaths.compose);
 
-            if (((Hashtable)response["json"]).ContainsKey("errors"))
+            string errors = GetErrorsFromRedditJson(response);
+            if (errors == "BAD_CAPTCHA" )
             {
-                if (((ArrayList)((Hashtable)response["json"])["errors"]).Count > 0)
-                {
-                    if (((ArrayList)((ArrayList)((Hashtable)response["json"])["errors"])[0])[0].ToString() == "BAD_CAPTCHA")
-                    {
-                        string capt = GetCaptcha();
-                        return ComposeMessage(to, subject, text, capt);
-                        //Application.Run(capt);
-                        //capt.Show();
-
-                    }
-                    return false;
-                }
-
+                string capt = GetCaptcha();
+                return ComposeMessage(to, subject, text, capt);
             }
             return true;
 
@@ -317,8 +385,8 @@ namespace RedditApi
         public bool PostComment(string id, string content)
         {
             //string modhash = (string)me["modhash"];
-            SendPOST(string.Format("thing_id={0}&text={1}&uh={2}", id, content, modhash),
-                    "http://www.reddit.com/api/comment");
+            SendPOST(string.Format("thing_id={0}&text={1}&uh={2}", id, content, m_modhash),
+                    m_domain + APIPaths.comment );
             return true;
         }
 
@@ -331,13 +399,12 @@ namespace RedditApi
             btn.Text = "Okay";
             txtbx.Dock = DockStyle.Right;
             btn.Dock = DockStyle.Bottom;
-            jsonGet.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr));
 
-            Hashtable response = SendPOST("uh=" + modhash, "http://www.reddit.com/api/new_captcha");
+            Hashtable response = SendPOST("uh=" + m_modhash, m_domain + APIPaths.new_captcha);
             ArrayList respAlist = (ArrayList)response["jquery"];
             string captAddrs = ((ArrayList)((ArrayList)respAlist[respAlist.Count - 1])[3])[0] as string;
 
-            byte[] pngImage = jsonGet.DownloadData("http://www.reddit.com/captcha/" + captAddrs + ".png");
+            byte[] pngImage = jsonGet.DownloadData( m_domain + APIPaths.captcha + captAddrs + ".png");
             System.Drawing.ImageConverter ic = new System.Drawing.ImageConverter();
             pbx.Image = (System.Drawing.Image)ic.ConvertFrom((object)pngImage);
             capt.Controls.Add(pbx);
@@ -359,7 +426,7 @@ namespace RedditApi
         private bool Vote(string post, int type)
         {
             //string modhash = (string)me["modhash"];
-            SendPOST(string.Format("id={0}&dir={1}&uh={2}", post, type, modhash),
+            SendPOST(string.Format("id={0}&dir={1}&uh={2}", post, type, m_modhash),
                     "http://www.reddit.com/api/vote");
 
             return true;
@@ -411,7 +478,7 @@ namespace RedditApi
         /// <returns></returns>
         private bool Post(string kind, string url, string sr, string title)
         {
-            SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&renderstyle=html", (string)me["modhash"], kind, url, sr, title),
+            SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&renderstyle=html", (string)m_me["modhash"], kind, url, sr, title),
                     "http://www.reddit.com/api/submit");
             return true;
         }
@@ -438,44 +505,25 @@ namespace RedditApi
             Post("link", link, sr, title);
         }
 
-        /// <summary>
-        /// Saves cookie to file
-        /// </summary>
-        /// <param name="filename"></param>
-        /// <param name="rcookie"></param>
-        private void Savecookie(string filename, CookieContainer rcookie)
+        string GetErrorsFromRedditJson(Hashtable json)
         {
-            Stream stream = File.Open(filename, FileMode.Create);
-            BinaryFormatter bFormatter = new BinaryFormatter();
-            bFormatter.Serialize(stream, rcookie);
-            stream.Close();
+            if (json.ContainsKey("json"))
+            {
+                Hashtable inner = json["json"] as Hashtable;
+                if (inner.ContainsKey("errors"))
+                {
+
+                    ArrayList errors = inner["errors"] as ArrayList;
+                    if (errors.Count > 0)
+                    {
+                        ArrayList errortxt = errors[0] as ArrayList;
+                        return errortxt[0] as string;
+                    }
+                }
+            }
+            return "";
         }
 
-        /// <summary>
-        /// Loads cookie from file
-        /// </summary>
-        /// <param name="filename"></param>
-        /// <returns></returns>
-        private CookieContainer Loadcookie(string filename)
-        {
-            CookieContainer rcookie;
-            try
-            {
-                Stream stream = File.Open(filename, FileMode.Open);
-                BinaryFormatter bFormatter = new BinaryFormatter();
-                rcookie = (CookieContainer)bFormatter.Deserialize(stream);
-                stream.Close();
-            }
-            catch (FileNotFoundException)
-            {
-                return null;
-            }
-            catch (SerializationException)
-            {
-                return null;
-            }
-            return rcookie;
-        }
     }
 
 }
