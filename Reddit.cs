@@ -46,378 +46,439 @@ freely, subject to the following restrictions:
    distribution.
 */
 
-
-class RedditAPI
+namespace RedditApi
 {
-
-    CookieContainer redditCookie;
-    WebClient jsonGet;
-    //A cache of me.json, since we likely don't need to retrieve it every time we use it
-    Hashtable me;
-    //Username
-    string usr;
-    string modhash;
-    //This should contain the current error message.
-    string errors;
-
-    string cookiefn;
-    /// <summary>
-    /// Class constructor, logs in or checks for previous login from cookie file
-    /// </summary>
-    /// <param name="user">Reddit account username</param>
-    /// <param name="pswd">Reddit Account password</param>
-    /// <param name="cookiefilename">File name of the cookie</param>
-    public RedditAPI(string user, string pswd, string cookiefilename /*= "cookie"*/)
+    static class APIPaths
     {
-        redditCookie = new CookieContainer();
-        jsonGet = new WebClient();
-        usr = user;
-        cookiefn = cookiefilename;
-        //Attempt to load cookie file
-        redditCookie = Loadcookie(cookiefilename);
-        //if (redditCookie == null)
+        public const string banned = "r/%s/about/banned";
+        public const string captcha = "captcha/";
+        public const string clearflairtemplates = "api/clearflairtemplates/";
+        public const string comment = "api/comment/";
+        public const string comments = "comments/";
+        public const string compose = "api/compose/";
+        public const string contributors = "r/{0}/about/contributors";
+        public const string del = "api/del/";
+        public const string feedback = "api/feedback/";
+        public const string flair = "api/flair/";
+        public const string flaircsv = "api/flaircsv/";
+        public const string flairlist = "r/{0}/api/flairlist/";
+        public const string flairtemplate = "api/flairtemplate";
+        public const string friend = "api/friend/";
+        public const string help = "help/";
+        public const string inbox = "message/inbox/";
+        public const string info = "button_info/";
+        public const string login = "api/login/{0}/";
+        public const string logout = "logout/";
+        public const string moderator = "message/moderator/";
+        public const string moderators = "r/{0}/about/moderators";
+        public const string morechildren = "api/morechildren/";
+        public const string my_mod_reddits = "reddits/mine/moderator/";
+        public const string my_reddits = "reddits/mine/";
+        public const string new_captcha = "api/new_captcha/";
+        public const string read_message = "api/read_message/";
+        public const string reddit_url = "/";
+        public const string register = "api/register/";
+        public const string report = "api/report/";
+        public const string reports = "r/{0}/about/reports/";
+        public const string save = "api/save/";
+        public const string saved = "saved/";
+        public const string search_reddit_names = "api/search_reddit_names/";
+        public const string sent = "message/sent/";
+        public const string site_admin = "api/site_admin/";
+        public const string submit = "api/submit/";
+        public const string subreddit = "r/{0}/";
+        public const string subreddit_about = "r/{0}/about/";
+        public const string subscribe = "api/subscribe/";
+        public const string unfriend = "api/unfriend/";
+        public const string unread = "message/unread/";
+        public const string unsave = "api/unsave/";
+        public const string user = "user/{0}/";
+        public const string user_about = "user/{0}/about/";
+        public const string vote = "api/vote/";
+    }
+    public class RedditAPI
+    {
+
+        CookieContainer redditCookie;
+        WebClient jsonGet;
+        //A cache of me.json, since we likely don't need to retrieve it every time we use it
+        Hashtable me;
+        //Username
+        string usr;
+        string modhash;
+        //This should contain the current error message.
+        string m_errors;
+        string m_host;
+        
+        public string errors
         {
-            //cookie file not found so do a full login
-            if (!Login(user, pswd))
+            get
             {
-                //We have a failed login show the errors.
-                MessageBox.Show(errors);
-                //Should probably throw an exception instead
-                return;
+                return m_errors;
             }
         }
 
-        //Fill out the normal me info
-        GetMe();
-    }
-
-    /// <summary>
-    /// Logs the user in
-    /// </summary>
-    /// <param name="user">Reddit account username</param>
-    /// <param name="pswd">Reddit account password</param>
-    /// <returns>True/False depending on success of login</returns>
-    private bool Login(string user, string pswd)
-    {
-        string postData = string.Format("api_type=json&user={0}&passwd={1}", user, pswd);
-        string loginURI = "http://www.reddit.com/api/login/" + user;
-        Hashtable response = SendPOST(postData, loginURI);
-        
-        //First check for errors. Should always contain errors key.
-        if (((ArrayList)((Hashtable)response["json"])["errors"]).Count>0)
+        string cookiefn;
+        /// <summary>
+        /// Class constructor, logs in or checks for previous login from cookie file
+        /// </summary>
+        /// <param name="user">Reddit account username</param>
+        /// <param name="pswd">Reddit Account password</param>
+        /// <param name="cookiefilename">File name of the cookie</param>
+        /// <param name="host">Host address of Website</param>
+        public RedditAPI(string user, string pswd, string cookiefilename, string host)
         {
-            errors = ((ArrayList)((ArrayList)((Hashtable)response["json"])["errors"])[0])[0].ToString();
-            return false;
-        }
-        //Only need the data segment
-        Hashtable data = ((Hashtable)((Hashtable)response["json"])["data"]);
-        modhash = data["modhash"].ToString();
-        string cookieval = data["cookie"].ToString();
-        //MessageBox.Show(r.ReadToEnd());
-        //Console.WriteLine(r.ReadToEnd());
-        //Console.WriteLine(redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr)));
-        redditCookie = new CookieContainer();
-        redditCookie.Add(new System.Uri("http://www.reddit.com/api/login/" + usr), new Cookie("reddit_session", cookieval.Replace(",","%2c").Replace(":","%3A"), "/", "reddit.com"));
-        Savecookie(cookiefn,redditCookie);
-        return true;
-    }
-
-    /// <summary>
-    /// Gets a fresh copy of me.json and saves it to the cache
-    /// </summary>
-    /// <returns>True/false depending on success</returns>
-    private bool GetMe()
-    {
-        me = (Hashtable)GetPage("http://www.reddit.com/api/me.json");
-        return me != null;
-    }
-
-    /// <summary>
-    /// Returns me.json's data as a hashtable
-    /// </summary>
-    /// <returns>me.json's data as a hashtable</returns>
-    /// <remarks>e.g. (string)me["modhash"] would be the user's modhash as a string</remarks>
-    public Hashtable GetMeCache()
-    {
-        return me;
-    }
-
-    /// <summary>
-    /// Checks if the user has mail based on a fresh polling of me.json
-    /// </summary>
-    /// <returns>True/false depending on if the user has an orangered</returns>
-    public bool HasMail()
-    {
-        //Get a fresh copy of me.json
-        GetMe();
-        return ((bool)me["has_mail"] == true);
-    }
-
-    /// <summary>
-    /// Sends data in POST to the specified URI
-    /// </summary>
-    /// <param name="data">POST data</param>
-    /// <param name="URI">URI to POST data to</param>
-    /// <returns>Returns Hashtable of reply data (possibly null if not json)</returns>
-    /// <exception cref="WebException">Will throw a web exception if there is a server error</exception>
-    private Hashtable SendPOST(string data, string URI)
-    {
-        HttpWebRequest connect = WebRequest.Create(new System.Uri(URI)) as HttpWebRequest;
-        //connect.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri(URI));
-        //Set all of the appropriate headers
-        connect.Headers["Useragent"] = "Reddit_C#_API_bot";
-        //If we have the cookie then add it in.
-        if (redditCookie != null)
-            connect.CookieContainer = redditCookie;
-        connect.Method = "POST";
-        connect.ContentType = "application/x-www-form-urlencoded";
-
-        //Fill in the content length
-        byte[] dataBytes = ASCIIEncoding.ASCII.GetBytes(data);
-        connect.ContentLength = dataBytes.Length;
-        Stream postStream = connect.GetRequestStream();
-
-        //Fill in the data
-        postStream.Write(dataBytes, 0, dataBytes.Length);
-        postStream.Close();
-        
-        //Do the actual connection
-        WebResponse response = connect.GetResponse();
-        if (((HttpWebResponse)response).StatusCode != HttpStatusCode.OK)
-        {
-            throw new WebException(((HttpWebResponse)response).StatusCode.ToString());
-        }
-        StreamReader r = new StreamReader(response.GetResponseStream());
-        string rawResponseData = r.ReadToEnd();
-        Hashtable responseData = (Hashtable)JSON.JsonDecode(rawResponseData);
-        return responseData;
-    }
-
-    public Hashtable GetPage(string URI)
-    {
-        jsonGet.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr));
-        
-        try
-        {
-            Stream jsonStream = jsonGet.OpenRead(URI);
-
-            StreamReader jSR = new StreamReader(jsonStream);
-            string metmp = jSR.ReadToEnd();
-            Hashtable pageData = (Hashtable)JSON.JsonDecode(metmp);
-            if (pageData.ContainsKey("errors"))
+            m_host = host;
+            redditCookie = new CookieContainer();
+            jsonGet = new WebClient();
+            usr = user;
+            cookiefn = cookiefilename;
+            //Attempt to load cookie file
+            redditCookie = Loadcookie(cookiefilename);
+            if (redditCookie == null)
             {
-                errors = "Possible Cookie Fail";
-                return null;
+                //cookie file not found so do a full login
+                if (!Login(user, pswd))
+                {
+                    //We have a failed login show the errors.
+                    //MessageBox.Show(errors);
+                    //Should probably throw an exception instead
+                    return;
+                }
             }
-            return (Hashtable)pageData["data"];
-        }
-        catch (WebException we)
-        {
-            errors = ((HttpWebResponse)we.Response).StatusCode.ToString();
-            return null;
-        }
-    }
 
-    public bool ComposeMessage(string to, string subject, string text)
-    {
-        return ComposeMessage(to, subject, text, "");
-    }
-    public bool ComposeMessage(string to, string subject, string text, string captcha)
-    {
-        Hashtable response = SendPOST(string.Format("uh={0}&to={1}&subject={2}&api_type=json&text={3}&captcha={4}", modhash, to, subject, text, captcha),
-            "http://www.reddit.com/api/compose");
+            //Fill out the normal me info
+            GetMe();
+        }
+        public RedditAPI(string user, string pswd, string cookiefilename) : this(user, pswd, cookiefilename, "http://www.reddit.com") { }
         
-        if (((Hashtable)response["json"]).ContainsKey("errors"))
+        /// <summary>
+        /// Logs the user in
+        /// </summary>
+        /// <param name="user">Reddit account username</param>
+        /// <param name="pswd">Reddit account password</param>
+        /// <returns>True/False depending on success of login</returns>
+        private bool Login(string user, string pswd)
         {
+            string postData = string.Format("api_type=json&user={0}&passwd={1}", user, pswd);
+            string loginURI = m_host + APIPaths.login + user;
+            Hashtable response = SendPOST(postData, loginURI);
+
+            //First check for errors. Should always contain errors key.
             if (((ArrayList)((Hashtable)response["json"])["errors"]).Count > 0)
             {
-                if (((ArrayList)((ArrayList)((Hashtable)response["json"])["errors"])[0])[0].ToString() == "BAD_CAPTCHA")
-                {
-                    string capt = GetCaptcha();
-                    return ComposeMessage(to, subject, text, capt);
-                    //Application.Run(capt);
-                    //capt.Show();
-
-                }
+                m_errors = ((ArrayList)((ArrayList)((Hashtable)response["json"])["errors"])[0])[0].ToString();
                 return false;
             }
-            
+            //Only need the data segment
+            Hashtable data = ((Hashtable)((Hashtable)response["json"])["data"]);
+            modhash = data["modhash"].ToString();
+            string cookieval = data["cookie"].ToString();
+            //MessageBox.Show(r.ReadToEnd());
+            //Console.WriteLine(r.ReadToEnd());
+            //Console.WriteLine(redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr)));
+            redditCookie = new CookieContainer();
+            redditCookie.Add(new System.Uri(m_host + APIPaths.login + user), new Cookie("reddit_session", cookieval.Replace(",", "%2c").Replace(":", "%3A"), "/", "reddit.com"));
+            Savecookie(cookiefn, redditCookie);
+            return true;
         }
-        return true;
-        
-    }
-    /// <summary>
-    /// Posts a comment to the specified "thing"
-    /// </summary>
-    /// <param name="id">"thing" ID code</param>
-    /// <param name="content">Comment contents</param>
-    /// <returns>True/false based on success (NYI)</returns>
-    /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
-    public bool PostComment(string id, string content)
-    {
-        //string modhash = (string)me["modhash"];
-        SendPOST(string.Format("thing_id={0}&text={1}&uh={2}", id, content, modhash),
-                "http://www.reddit.com/api/comment");
-        return true;
-    }
 
-    private string GetCaptcha()
-    {
-        Form capt = new Form();
-        PictureBox pbx = new PictureBox();
-        TextBox txtbx = new TextBox();
-        Button btn = new Button();
-        btn.Text = "Okay";
-        txtbx.Dock = DockStyle.Right;
-        btn.Dock = DockStyle.Bottom;
-        jsonGet.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr));
-
-        Hashtable response = SendPOST("uh=" + modhash, "http://www.reddit.com/api/new_captcha");
-        ArrayList respAlist = (ArrayList)response["jquery"];
-        string captAddrs = ((ArrayList)((ArrayList)respAlist[respAlist.Count - 1])[3])[0] as string;
-
-        byte[] pngImage = jsonGet.DownloadData("http://www.reddit.com/captcha/" + captAddrs +".png");
-        System.Drawing.ImageConverter ic = new System.Drawing.ImageConverter();
-        pbx.Image = (System.Drawing.Image)ic.ConvertFrom((object)pngImage);
-        capt.Controls.Add(pbx);
-        capt.Controls.Add(txtbx);
-        capt.Controls.Add(btn);
-        btn.Click += delegate(object sender, EventArgs e)
+        /// <summary>
+        /// Gets a fresh copy of me.json and saves it to the cache
+        /// </summary>
+        /// <returns>True/false depending on success</returns>
+        private bool GetMe()
         {
-            capt.Close();
-        };
-        capt.ShowDialog();
-        return string.Format("{0}&iden={1}", txtbx.Text, captAddrs);
-    }
-    /// <summary>
-    /// Casts a vote on the specified "thing"
-    /// </summary>
-    /// <param name="post">"thing" ID</param>
-    /// <param name="type">Vote type, 1, 0 or -1</param>
-    /// <returns>True/false based on success (NYI)</returns>
-    private bool Vote(string post, int type)
-    {
-        //string modhash = (string)me["modhash"];
-        SendPOST(string.Format("id={0}&dir={1}&uh={2}", post, type, modhash),
-                "http://www.reddit.com/api/vote");
+            me = (Hashtable)GetPage("http://www.reddit.com/api/me.json");
+            return me != null;
+        }
 
-        return true;
-    }
-
-    /// <summary>
-    /// Upvotes a "thing"
-    /// </summary>
-    /// <param name="postID">"thing" ID</param>
-    /// <returns></returns>
-    /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
-    public bool Upvote(string postID)
-    {
-        Vote(postID, 1);
-        return true;
-    }
-
-    /// <summary>
-    /// Rescinds vote from "thing"
-    /// </summary>
-    /// <param name="postID">"thing" ID</param>
-    /// <returns></returns>
-    /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
-    public bool UnVote(string postID)
-    {
-        Vote(postID, 0);
-        return true;
-    }
-
-    /// <summary>
-    /// Downvotes a "thing"
-    /// </summary>
-    /// <param name="postID">"thing" ID</param>
-    /// <returns></returns>
-    /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
-    public bool Downvote(string postID)
-    {
-        Vote(postID, -1);
-        return true;
-    }
-
-    /// <summary>
-    /// Posts a link/self post
-    /// </summary>
-    /// <param name="kind">"self" or "link"</param>
-    /// <param name="url">URL or Self Post content</param>
-    /// <param name="sr">subreddit</param>
-    /// <param name="title">Title of post</param>
-    /// <returns></returns>
-    private bool Post(string kind, string url, string sr, string title)
-    {
-        SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&renderstyle=html", (string)me["modhash"], kind, url, sr, title),
-                "http://www.reddit.com/api/submit");
-        return true;
-    }
-
-    /// <summary>
-    /// Posts a self post
-    /// </summary>
-    /// <param name="link">Text of the self post</param>
-    /// <param name="title">Title of submission</param>
-    /// <param name="sr">Subreddit to post to</param>
-    public void PostSelf(string link, string title, string sr)
-    {
-        Post("self", link, sr, title);
-    }
-
-    /// <summary>
-    /// Posts a link
-    /// </summary>
-    /// <param name="link">URI of post</param>
-    /// <param name="title">Title of submission</param>
-    /// <param name="sr">Subreddit to post to</param>
-    public void PostLink(string link, string title, string sr)
-    {
-        Post("link", link, sr, title);
-    }
-
-    /// <summary>
-    /// Saves cookie to file
-    /// </summary>
-    /// <param name="filename"></param>
-    /// <param name="rcookie"></param>
-    private void Savecookie(string filename, CookieContainer rcookie)
-    {
-        Stream stream = File.Open(filename, FileMode.Create);
-        BinaryFormatter bFormatter = new BinaryFormatter();
-        bFormatter.Serialize(stream, rcookie);
-        stream.Close();
-    }
-
-    /// <summary>
-    /// Loads cookie from file
-    /// </summary>
-    /// <param name="filename"></param>
-    /// <returns></returns>
-    private CookieContainer Loadcookie(string filename)
-    {
-        CookieContainer rcookie;
-        try
+        /// <summary>
+        /// Returns me.json's data as a hashtable
+        /// </summary>
+        /// <returns>me.json's data as a hashtable</returns>
+        /// <remarks>e.g. (string)me["modhash"] would be the user's modhash as a string</remarks>
+        public Hashtable GetMeCache()
         {
-            Stream stream = File.Open(filename, FileMode.Open);
+            return me;
+        }
+
+        /// <summary>
+        /// Checks if the user has mail based on a fresh polling of me.json
+        /// </summary>
+        /// <returns>True/false depending on if the user has an orangered</returns>
+        public bool HasMail()
+        {
+            //Get a fresh copy of me.json
+            GetMe();
+            return ((bool)me["has_mail"] == true);
+        }
+
+        /// <summary>
+        /// Sends data in POST to the specified URI
+        /// </summary>
+        /// <param name="data">POST data</param>
+        /// <param name="URI">URI to POST data to</param>
+        /// <returns>Returns Hashtable of reply data (possibly null if not json)</returns>
+        /// <exception cref="WebException">Will throw a web exception if there is a server error</exception>
+        private Hashtable SendPOST(string data, string URI)
+        {
+            HttpWebRequest connect = WebRequest.Create(new System.Uri(URI)) as HttpWebRequest;
+            //connect.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri(URI));
+            //Set all of the appropriate headers
+            connect.Headers["Useragent"] = "Reddit_C#_API_bot";
+            //If we have the cookie then add it in.
+            if (redditCookie != null)
+                connect.CookieContainer = redditCookie;
+            connect.Method = "POST";
+            connect.ContentType = "application/x-www-form-urlencoded";
+
+            //Fill in the content length
+            byte[] dataBytes = ASCIIEncoding.ASCII.GetBytes(data);
+            connect.ContentLength = dataBytes.Length;
+            Stream postStream = connect.GetRequestStream();
+
+            //Fill in the data
+            postStream.Write(dataBytes, 0, dataBytes.Length);
+            postStream.Close();
+
+            //Do the actual connection
+            WebResponse response = connect.GetResponse();
+            if (((HttpWebResponse)response).StatusCode != HttpStatusCode.OK)
+            {
+                throw new WebException(((HttpWebResponse)response).StatusCode.ToString());
+            }
+            StreamReader r = new StreamReader(response.GetResponseStream());
+            string rawResponseData = r.ReadToEnd();
+            Hashtable responseData = (Hashtable)JSON.JsonDecode(rawResponseData);
+            return responseData;
+        }
+
+        public Hashtable GetPage(string URI)
+        {
+            jsonGet.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr));
+
+            try
+            {
+                Stream jsonStream = jsonGet.OpenRead(URI);
+
+                StreamReader jSR = new StreamReader(jsonStream);
+                string metmp = jSR.ReadToEnd();
+                Hashtable pageData = (Hashtable)JSON.JsonDecode(metmp);
+                if (pageData.ContainsKey("errors"))
+                {
+                    m_errors = "Possible Cookie Fail";
+                    return null;
+                }
+                return (Hashtable)pageData["data"];
+            }
+            catch (WebException we)
+            {
+                m_errors = ((HttpWebResponse)we.Response).StatusCode.ToString();
+                return null;
+            }
+        }
+
+        public bool ComposeMessage(string to, string subject, string text)
+        {
+            return ComposeMessage(to, subject, text, "");
+        }
+        public bool ComposeMessage(string to, string subject, string text, string captcha)
+        {
+            Hashtable response = SendPOST(string.Format("uh={0}&to={1}&subject={2}&api_type=json&text={3}&captcha={4}", modhash, to, subject, text, captcha),
+                "http://www.reddit.com/api/compose");
+
+            if (((Hashtable)response["json"]).ContainsKey("errors"))
+            {
+                if (((ArrayList)((Hashtable)response["json"])["errors"]).Count > 0)
+                {
+                    if (((ArrayList)((ArrayList)((Hashtable)response["json"])["errors"])[0])[0].ToString() == "BAD_CAPTCHA")
+                    {
+                        string capt = GetCaptcha();
+                        return ComposeMessage(to, subject, text, capt);
+                        //Application.Run(capt);
+                        //capt.Show();
+
+                    }
+                    return false;
+                }
+
+            }
+            return true;
+
+        }
+        /// <summary>
+        /// Posts a comment to the specified "thing"
+        /// </summary>
+        /// <param name="id">"thing" ID code</param>
+        /// <param name="content">Comment contents</param>
+        /// <returns>True/false based on success (NYI)</returns>
+        /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
+        public bool PostComment(string id, string content)
+        {
+            //string modhash = (string)me["modhash"];
+            SendPOST(string.Format("thing_id={0}&text={1}&uh={2}", id, content, modhash),
+                    "http://www.reddit.com/api/comment");
+            return true;
+        }
+
+        private string GetCaptcha()
+        {
+            Form capt = new Form();
+            PictureBox pbx = new PictureBox();
+            TextBox txtbx = new TextBox();
+            Button btn = new Button();
+            btn.Text = "Okay";
+            txtbx.Dock = DockStyle.Right;
+            btn.Dock = DockStyle.Bottom;
+            jsonGet.Headers["COOKIE"] = redditCookie.GetCookieHeader(new System.Uri("http://www.reddit.com/api/login/" + usr));
+
+            Hashtable response = SendPOST("uh=" + modhash, "http://www.reddit.com/api/new_captcha");
+            ArrayList respAlist = (ArrayList)response["jquery"];
+            string captAddrs = ((ArrayList)((ArrayList)respAlist[respAlist.Count - 1])[3])[0] as string;
+
+            byte[] pngImage = jsonGet.DownloadData("http://www.reddit.com/captcha/" + captAddrs + ".png");
+            System.Drawing.ImageConverter ic = new System.Drawing.ImageConverter();
+            pbx.Image = (System.Drawing.Image)ic.ConvertFrom((object)pngImage);
+            capt.Controls.Add(pbx);
+            capt.Controls.Add(txtbx);
+            capt.Controls.Add(btn);
+            btn.Click += delegate(object sender, EventArgs e)
+            {
+                capt.Close();
+            };
+            capt.ShowDialog();
+            return string.Format("{0}&iden={1}", txtbx.Text, captAddrs);
+        }
+        /// <summary>
+        /// Casts a vote on the specified "thing"
+        /// </summary>
+        /// <param name="post">"thing" ID</param>
+        /// <param name="type">Vote type, 1, 0 or -1</param>
+        /// <returns>True/false based on success (NYI)</returns>
+        private bool Vote(string post, int type)
+        {
+            //string modhash = (string)me["modhash"];
+            SendPOST(string.Format("id={0}&dir={1}&uh={2}", post, type, modhash),
+                    "http://www.reddit.com/api/vote");
+
+            return true;
+        }
+
+        /// <summary>
+        /// Upvotes a "thing"
+        /// </summary>
+        /// <param name="postID">"thing" ID</param>
+        /// <returns></returns>
+        /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
+        public bool Upvote(string postID)
+        {
+            Vote(postID, 1);
+            return true;
+        }
+
+        /// <summary>
+        /// Rescinds vote from "thing"
+        /// </summary>
+        /// <param name="postID">"thing" ID</param>
+        /// <returns></returns>
+        /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
+        public bool UnVote(string postID)
+        {
+            Vote(postID, 0);
+            return true;
+        }
+
+        /// <summary>
+        /// Downvotes a "thing"
+        /// </summary>
+        /// <param name="postID">"thing" ID</param>
+        /// <returns></returns>
+        /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
+        public bool Downvote(string postID)
+        {
+            Vote(postID, -1);
+            return true;
+        }
+
+        /// <summary>
+        /// Posts a link/self post
+        /// </summary>
+        /// <param name="kind">"self" or "link"</param>
+        /// <param name="url">URL or Self Post content</param>
+        /// <param name="sr">subreddit</param>
+        /// <param name="title">Title of post</param>
+        /// <returns></returns>
+        private bool Post(string kind, string url, string sr, string title)
+        {
+            SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&renderstyle=html", (string)me["modhash"], kind, url, sr, title),
+                    "http://www.reddit.com/api/submit");
+            return true;
+        }
+
+        /// <summary>
+        /// Posts a self post
+        /// </summary>
+        /// <param name="link">Text of the self post</param>
+        /// <param name="title">Title of submission</param>
+        /// <param name="sr">Subreddit to post to</param>
+        public void PostSelf(string link, string title, string sr)
+        {
+            Post("self", link, sr, title);
+        }
+
+        /// <summary>
+        /// Posts a link
+        /// </summary>
+        /// <param name="link">URI of post</param>
+        /// <param name="title">Title of submission</param>
+        /// <param name="sr">Subreddit to post to</param>
+        public void PostLink(string link, string title, string sr)
+        {
+            Post("link", link, sr, title);
+        }
+
+        /// <summary>
+        /// Saves cookie to file
+        /// </summary>
+        /// <param name="filename"></param>
+        /// <param name="rcookie"></param>
+        private void Savecookie(string filename, CookieContainer rcookie)
+        {
+            Stream stream = File.Open(filename, FileMode.Create);
             BinaryFormatter bFormatter = new BinaryFormatter();
-            rcookie = (CookieContainer)bFormatter.Deserialize(stream);
+            bFormatter.Serialize(stream, rcookie);
             stream.Close();
         }
-        catch (FileNotFoundException)
+
+        /// <summary>
+        /// Loads cookie from file
+        /// </summary>
+        /// <param name="filename"></param>
+        /// <returns></returns>
+        private CookieContainer Loadcookie(string filename)
         {
-            return null;
+            CookieContainer rcookie;
+            try
+            {
+                Stream stream = File.Open(filename, FileMode.Open);
+                BinaryFormatter bFormatter = new BinaryFormatter();
+                rcookie = (CookieContainer)bFormatter.Deserialize(stream);
+                stream.Close();
+            }
+            catch (FileNotFoundException)
+            {
+                return null;
+            }
+            catch (SerializationException)
+            {
+                return null;
+            }
+            return rcookie;
         }
-        catch (SerializationException)
-        {
-            return null;
-        }
-        return rcookie;
     }
+
 }
-
-
 //I didn't want to write my own JSON parser, so I used the free one available here:
 // http://techblog.procurios.nl/k/news/view/14605/14863/How-do-I-write-my-own-parser-for-JSON.html
 // Included in the same source file because I wanted it to be in 1 cs file
