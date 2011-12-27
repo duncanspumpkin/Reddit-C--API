@@ -148,7 +148,7 @@ namespace RedditApi
             LoadConfigFile();
         }
         
-        RedditAPI():this("Reddit_C#_Bot"){}
+        public RedditAPI():this("Reddit_C#_Bot"){}
 
         void LoadConfigFile()
         {
@@ -252,11 +252,18 @@ namespace RedditApi
             Uri cookieuri = new Uri(m_domain + string.Format(APIPaths.login, user));
             redditCookie.Add(cookieuri, new Cookie("reddit_session", cookieval.Replace(",", "%2c").Replace(":", "%3A"), "/", "reddit.com"));
             jsonGet.Headers["cookie"] = redditCookie.GetCookieHeader(cookieuri);
-
+            jsonGet.Headers["Useragent"] = m_useragent;
             m_logged_in = true;
             return true;
         }
 
+        public void Logout()
+        {
+            if (!m_logged_in) return;
+            m_usr = "";
+            m_logged_in = false;
+            SendPOST(String.Format("api_type=json&uh={0}", m_modhash), m_domain + APIPaths.logout + ".json");
+        }
         /// <summary>
         /// Gets a fresh copy of me.json and saves it to the cache
         /// </summary>
@@ -363,6 +370,8 @@ namespace RedditApi
         }
         public bool ComposeMessage(string to, string subject, string text, string captcha)
         {
+            if (!m_logged_in) return false;
+
             Hashtable response = SendPOST(string.Format("uh={0}&to={1}&subject={2}&api_type=json&text={3}&captcha={4}", m_modhash, to, subject, text, captcha),
                 m_domain + APIPaths.compose);
 
@@ -427,7 +436,7 @@ namespace RedditApi
         {
             //string modhash = (string)me["modhash"];
             SendPOST(string.Format("id={0}&dir={1}&uh={2}", post, type, m_modhash),
-                    "http://www.reddit.com/api/vote");
+                    m_domain + APIPaths.vote);
 
             return true;
         }
@@ -479,7 +488,7 @@ namespace RedditApi
         private bool Post(string kind, string url, string sr, string title)
         {
             SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&renderstyle=html", (string)m_me["modhash"], kind, url, sr, title),
-                    "http://www.reddit.com/api/submit");
+                    m_domain + APIPaths.submit);
             return true;
         }
 
@@ -503,6 +512,25 @@ namespace RedditApi
         public void PostLink(string link, string title, string sr)
         {
             Post("link", link, sr, title);
+        }
+
+        public void CreateRedditor(string username, string password, string email)
+        {
+            CreateRedditor(username, password, email, "");
+        }
+
+        public void CreateRedditor(string username, string password, string email, string captcha)
+        {
+            if (!m_logged_in) return;
+            Hashtable resp = SendPOST(string.Format("email={0}&op=reg&passwd={1}&passwd2={1}&user={2}&captcha={3}&api_type=json", email, password, username, captcha),
+                m_domain + APIPaths.register);
+            string errors = GetErrorsFromRedditJson(resp);
+            //Add in username errors, password errors, email errors
+            if (errors == "BAD_CAPTCHA")
+            {
+                CreateRedditor( username, password, email, GetCaptcha() );
+            }
+            Login(username, password);
         }
 
         string GetErrorsFromRedditJson(Hashtable json)
