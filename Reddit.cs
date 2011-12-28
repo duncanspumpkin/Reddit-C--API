@@ -259,7 +259,7 @@ namespace RedditApi
 
         public void Logout()
         {
-            if (!m_logged_in) return;
+            if (!m_logged_in) throw new LoginRequired();
             m_usr = "";
             m_logged_in = false;
             SendPOST(String.Format("api_type=json&uh={0}", m_modhash), m_domain + APIPaths.logout + ".json");
@@ -270,6 +270,8 @@ namespace RedditApi
         /// <returns>True/false depending on success</returns>
         private bool GetMe()
         {
+            if (!m_logged_in) throw new LoginRequired();
+
             m_me = GetPage( m_domain + APIPaths.me);
             return m_me != null;
         }
@@ -338,30 +340,25 @@ namespace RedditApi
             StreamReader r = new StreamReader(response.GetResponseStream());
             string rawResponseData = r.ReadToEnd();
             Hashtable responseData = (Hashtable)JSON.JsonDecode(rawResponseData);
+            GetErrorsFromRedditJson(responseData);
             return responseData;
         }
 
         public Hashtable GetPage(string URI)
         {
-            try
-            {
-                Stream jsonStream = jsonGet.OpenRead(URI);
+            
+            Stream jsonStream = jsonGet.OpenRead(URI);
 
-                StreamReader jSR = new StreamReader(jsonStream);
-                string metmp = jSR.ReadToEnd();
-                Hashtable pageData = (Hashtable)JSON.JsonDecode(metmp);
-                if (pageData.ContainsKey("errors"))
-                {
-                    m_errors = "Possible Cookie Fail";
-                    return null;
-                }
-                return (Hashtable)pageData["data"];
-            }
-            catch (WebException we)
+            StreamReader jSR = new StreamReader(jsonStream);
+            string metmp = jSR.ReadToEnd();
+            Hashtable pageData = (Hashtable)JSON.JsonDecode(metmp);
+            
+            if (pageData.ContainsKey("errors"))
             {
-                m_errors = ((HttpWebResponse)we.Response).StatusCode.ToString();
+                m_errors = "Possible Cookie Fail";
                 return null;
             }
+            return (Hashtable)pageData["data"];
         }
 
         public bool ComposeMessage(string to, string subject, string text)
@@ -370,16 +367,15 @@ namespace RedditApi
         }
         public bool ComposeMessage(string to, string subject, string text, string captcha)
         {
-            if (!m_logged_in) return false;
-
-            Hashtable response = SendPOST(string.Format("uh={0}&to={1}&subject={2}&api_type=json&text={3}&captcha={4}", m_modhash, to, subject, text, captcha),
-                m_domain + APIPaths.compose);
-
-            string errors = GetErrorsFromRedditJson(response);
-            if (errors == "BAD_CAPTCHA" )
+            if (!m_logged_in) throw new LoginRequired();
+            try
             {
-                string capt = GetCaptcha();
-                return ComposeMessage(to, subject, text, capt);
+                Hashtable response = SendPOST(string.Format("uh={0}&to={1}&subject={2}&api_type=json&text={3}&captcha={4}", m_modhash, to, subject, text, captcha),
+                    m_domain + APIPaths.compose);
+            }
+            catch (BadCaptcha)
+            {
+                ComposeMessage(to, subject, text, GetCaptcha());
             }
             return true;
 
@@ -393,6 +389,7 @@ namespace RedditApi
         /// <remarks>See Glossary here for more info on "things" https://github.com/reddit/reddit/wiki/API </remarks>
         public bool PostComment(string id, string content)
         {
+            if( !m_logged_in) throw new LoginRequired();
             //string modhash = (string)me["modhash"];
             SendPOST(string.Format("thing_id={0}&text={1}&uh={2}", id, content, m_modhash),
                     m_domain + APIPaths.comment );
@@ -434,6 +431,7 @@ namespace RedditApi
         /// <returns>True/false based on success (NYI)</returns>
         private bool Vote(string post, int type)
         {
+            if (!m_logged_in) throw new LoginRequired();
             //string modhash = (string)me["modhash"];
             SendPOST(string.Format("id={0}&dir={1}&uh={2}", post, type, m_modhash),
                     m_domain + APIPaths.vote);
@@ -487,6 +485,7 @@ namespace RedditApi
         /// <returns></returns>
         private bool Post(string kind, string url, string sr, string title)
         {
+            if (!m_logged_in) throw new LoginRequired();
             SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&renderstyle=html", (string)m_me["modhash"], kind, url, sr, title),
                     m_domain + APIPaths.submit);
             return true;
@@ -519,18 +518,19 @@ namespace RedditApi
             CreateRedditor(username, password, email, "");
         }
 
-        public void CreateRedditor(string username, string password, string email, string captcha)
+        private void CreateRedditor(string username, string password, string email, string captcha)
         {
-            if (!m_logged_in) return;
-            Hashtable resp = SendPOST(string.Format("email={0}&op=reg&passwd={1}&passwd2={1}&user={2}&captcha={3}&api_type=json", email, password, username, captcha),
-                m_domain + APIPaths.register);
-            string errors = GetErrorsFromRedditJson(resp);
-            //Add in username errors, password errors, email errors
-            if (errors == "BAD_CAPTCHA")
+            
+            try
             {
-                CreateRedditor( username, password, email, GetCaptcha() );
+                Hashtable resp = SendPOST(string.Format("email={0}&op=reg&passwd={1}&passwd2={1}&user={2}&captcha={3}&api_type=json", email, password, username, captcha),
+                    m_domain + APIPaths.register);
+                Login(username, password);
             }
-            Login(username, password);
+            catch (BadCaptcha)
+            {
+                CreateRedditor(username, password, email, GetCaptcha());
+            }
         }
 
         string GetErrorsFromRedditJson(Hashtable json)
@@ -545,7 +545,22 @@ namespace RedditApi
                     if (errors.Count > 0)
                     {
                         ArrayList errortxt = errors[0] as ArrayList;
-                        return errortxt[0] as string;
+
+                        switch (errortxt[0] as string)
+                        {
+                            case "BAD_CAPTCHA":
+                                throw new BadCaptcha("", json);
+                            case "WRONG_PASSWORD":
+                                throw new InvalidUserPass("", json);
+                            case "USER_DOESNT_EXIST":
+                                throw new NonExistantUser("", json);
+                            case "RATELIMIT":
+                                throw new RateLimitExceeded("", json);
+                            case "USERNAME_TAKEN":
+                                throw new UserTaken("", json);
+                            default:
+                                throw new APIException(errortxt[0] as string, json, "");
+                        }
                     }
                 }
             }
@@ -554,7 +569,63 @@ namespace RedditApi
 
     }
 
+    class LoginRequired : Exception { }
+
+    class APIException:Exception
+    {
+        string m_error_type;
+        public string error_type
+        {
+            get
+            {
+                return m_error_type;
+            }
+        }
+
+        Hashtable m_response;
+        public Hashtable response { get { return m_response; } }
+
+        public APIException(string Error_Type, Hashtable Resp, string message)
+            : base(message)
+        {
+            m_response = Resp;
+            m_error_type = Error_Type;
+        }
+
+    }
+
+    class BadCaptcha : APIException
+    {
+        public BadCaptcha(string message, Hashtable Response)
+            : base("BAD_CAPTCHA", Response, message) { }
+    }
+
+    class NonExistantUser : APIException
+    {
+        public NonExistantUser(string message, Hashtable Response)
+            : base("USER_DOESNT_EXIST", Response, message) { }
+    }
+
+    class UserTaken : APIException
+    {
+         public UserTaken(string message, Hashtable Response)
+            : base("USERNAME_TAKEN", Response, message) { }
+    }
+
+    class InvalidUserPass : APIException
+    {
+        public InvalidUserPass(string message, Hashtable Response)
+            : base("WRONG_PASSWORD", Response, message) { }
+    }
+
+    class RateLimitExceeded : APIException
+    {
+        public RateLimitExceeded(string message, Hashtable Response)
+            : base("RATELIMIT", Response, message) { }
+    }
 }
+
+
 //I didn't want to write my own JSON parser, so I used the free one available here:
 // http://techblog.procurios.nl/k/news/view/14605/14863/How-do-I-write-my-own-parser-for-JSON.html
 // Included in the same source file because I wanted it to be in 1 cs file
