@@ -79,7 +79,7 @@ namespace RedditApi
         public const string my_reddits = "reddits/mine/";
         public const string new_captcha = "api/new_captcha/";
         public const string read_message = "api/read_message/";
-        public const string reddit_url = "/";
+        public const string reddit_url = "";
         public const string register = "api/register/";
         public const string report = "api/report/";
         public const string reports = "r/{0}/about/reports/";
@@ -263,6 +263,7 @@ namespace RedditApi
             m_usr = "";
             m_logged_in = false;
             SendPOST(String.Format("api_type=json&uh={0}", m_modhash), m_domain + APIPaths.logout + ".json");
+            m_modhash = "";
         }
         /// <summary>
         /// Gets a fresh copy of me.json and saves it to the cache
@@ -272,7 +273,7 @@ namespace RedditApi
         {
             if (!m_logged_in) throw new LoginRequired();
 
-            m_me = GetPage( m_domain + APIPaths.me);
+            m_me = GetPage( m_domain + APIPaths.me)["data"] as Hashtable;
             return m_me != null;
         }
 
@@ -316,6 +317,7 @@ namespace RedditApi
             HttpWebRequest connect = WebRequest.Create(new Uri(URI)) as HttpWebRequest;
             //Set all of the appropriate headers
             connect.Headers["Useragent"] = m_useragent;
+            
             //If we have the cookie then add it in.
             if (redditCookie != null)
                 connect.CookieContainer = redditCookie;
@@ -346,19 +348,19 @@ namespace RedditApi
 
         public Hashtable GetPage(string URI)
         {
-            
             Stream jsonStream = jsonGet.OpenRead(URI);
-
+            
             StreamReader jSR = new StreamReader(jsonStream);
             string metmp = jSR.ReadToEnd();
             Hashtable pageData = (Hashtable)JSON.JsonDecode(metmp);
-            
-            if (pageData.ContainsKey("errors"))
-            {
-                m_errors = "Possible Cookie Fail";
-                return null;
-            }
-            return (Hashtable)pageData["data"];
+
+            GetErrorsFromRedditJson(pageData);
+            return pageData;
+        }
+
+        public Hashtable GetJSON(string URI)
+        {
+            return GetPage(URI + ".json");
         }
 
         public bool ComposeMessage(string to, string subject, string text)
@@ -474,6 +476,41 @@ namespace RedditApi
             Vote(postID, -1);
             return true;
         }
+
+        public Hashtable GetFrontPage()
+        {
+            return GetContent(m_domain + APIPaths.reddit_url);
+        }
+
+        public Hashtable GetSubReddit(string subreddit)
+        {
+            return GetContent(m_domain + string.Format(APIPaths.subreddit, subreddit));
+        }
+
+        private Hashtable GetContent(string URI)
+        {
+            return GetContent(URI, "", "data", "children");
+        }
+        private Hashtable GetContent(string URI, string after, string root_field, string thing_field)
+        {
+            int content_found = 0;
+            Hashtable content = new Hashtable();
+            while (content_found < m_content_limit)
+            {
+                jsonGet.QueryString.Add("after", after);
+                Hashtable h = GetJSON(URI);
+                jsonGet.QueryString.Clear();
+                Hashtable innerh = h[root_field] as Hashtable;
+                after = innerh["after"] as string;
+                foreach (Hashtable thing in innerh[thing_field] as ArrayList)
+                {
+                    content.Add(content_found++,thing);
+                    if (content_found >= m_content_limit) return content;
+                }
+            }
+            return content;
+        }
+
 
         /// <summary>
         /// Posts a link/self post
