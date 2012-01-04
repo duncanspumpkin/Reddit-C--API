@@ -487,6 +487,17 @@ namespace RedditApi
             return GetContent(m_domain + string.Format(APIPaths.subreddit, subreddit));
         }
 
+        public ArrayList GetComments(string thing)
+        {
+            Stream jsonStream = jsonGet.OpenRead(m_domain + APIPaths.comments + thing + ".json");
+            
+            StreamReader jSR = new StreamReader(jsonStream);
+            string metmp = jSR.ReadToEnd();
+            ArrayList pageData = (ArrayList)JSON.JsonDecode(metmp);
+            //GetErrorsFromRedditJson(pageData);
+            return pageData;
+        }
+
         private Hashtable GetContent(string URI)
         {
             return GetContent(URI, "", "data", "children");
