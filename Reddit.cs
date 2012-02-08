@@ -531,14 +531,25 @@ namespace RedditApi
         /// <param name="sr">subreddit</param>
         /// <param name="title">Title of post</param>
         /// <returns></returns>
-        private bool Post(string kind, string url, string sr, string title)
+        private bool Post(string kind, string url, string sr, string title, string captcha)
         {
             if (!m_logged_in) throw new LoginRequired();
-            SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&renderstyle=html", (string)m_me["modhash"], kind, url, sr, title),
-                    m_domain + APIPaths.submit);
+            try
+            {
+                SendPOST(string.Format("uh={0}&kind={1}&url={2}&sr={3}&title={4}&r={3}&api_type=json&captcha={5}", m_modhash, kind, url, sr, title, captcha),
+                       m_domain + APIPaths.submit);
+            }
+            catch (BadCaptcha)
+            {
+                return Post(kind, url, sr, title, GetCaptcha());
+            }
             return true;
         }
 
+        private bool Post(string kind, string url, string sr, string title)
+        {
+            return Post(kind, url, sr, title, "");
+        }
         /// <summary>
         /// Posts a self post
         /// </summary>
