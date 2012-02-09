@@ -1,1 +1,27 @@
 Heavily modified version of C# Reddit API Class 1.0 By Ruairidh Barnes
+
+Example Use:
+This will set the useragent as well if left blank will default to Reddit_C#_Bot.
+
+RedditAPI reddit = new RedditAPI("Reddit_C#_Bot");
+
+Login is required for most uses.
+
+reddit.Login("Username","Password");
+
+For now capatcha problems will throw up a new window and a user has to fill out the details. This will be changed in the future at some point.
+Messages are sent using the following. Login is requried, capatcha may also be requried.
+
+reddit.ComposeMessage("Username2","subject","actual body text");
+
+reddit.GetFrontPage();
+
+reddit.GetSubReddit("programming");
+
+reddit.GetComments("thingID");
+
+reddit.PostSelf("Self text", "Title", "subreddit");
+
+reddit.PostLink("www.google.com","Title","subreddit");
+
+reddit.CreateRedditor("username","password","email");
