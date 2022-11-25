@@ -232,29 +232,36 @@ namespace RedditApi
         /// <returns>True/False depending on success of login</returns>
         public bool Login(string user, string pswd)
         {
-            string postData = string.Format("api_type=json&user={0}&passwd={1}", user, pswd);
-            string loginURI = m_domain + string.Format(APIPaths.login, user);
-            Hashtable response = SendPOST(postData, loginURI);
-            m_usr = user;
-
-            m_errors = GetErrorsFromRedditJson(response);
-            //First check for errors. Should always contain errors key.
-            if (m_errors != "" )
+            try
             {
-                return false;
+               string postData = string.Format("api_type=json&user={0}&passwd={1}", user, pswd);
+               string loginURI = m_domain + string.Format(APIPaths.login, user);
+               Hashtable response = SendPOST(postData, loginURI);
+               m_usr = user;
+   
+               m_errors = GetErrorsFromRedditJson(response);
+               //First check for errors. Should always contain errors key.
+               if (m_errors != "" )
+               {
+                   return false;
+               }
+               //Only need the data segment
+               Hashtable data = ((Hashtable)((Hashtable)response["json"])["data"]);
+               m_modhash = data["modhash"].ToString();
+               string cookieval = data["cookie"].ToString();
+               
+               redditCookie = new CookieContainer();
+               Uri cookieuri = new Uri(m_domain + string.Format(APIPaths.login, user));
+               redditCookie.Add(cookieuri, new Cookie("reddit_session", cookieval.Replace(",", "%2c").Replace(":", "%3A"), "/", "reddit.com"));
+               jsonGet.Headers["cookie"] = redditCookie.GetCookieHeader(cookieuri);
+               jsonGet.Headers["Useragent"] = m_useragent;
+               m_logged_in = true;
+               return true;
             }
-            //Only need the data segment
-            Hashtable data = ((Hashtable)((Hashtable)response["json"])["data"]);
-            m_modhash = data["modhash"].ToString();
-            string cookieval = data["cookie"].ToString();
-            
-            redditCookie = new CookieContainer();
-            Uri cookieuri = new Uri(m_domain + string.Format(APIPaths.login, user));
-            redditCookie.Add(cookieuri, new Cookie("reddit_session", cookieval.Replace(",", "%2c").Replace(":", "%3A"), "/", "reddit.com"));
-            jsonGet.Headers["cookie"] = redditCookie.GetCookieHeader(cookieuri);
-            jsonGet.Headers["Useragent"] = m_useragent;
-            m_logged_in = true;
-            return true;
+            catch (InvalidUserPass)
+            {
+               return false;
+            }
         }
 
         public void Logout()
